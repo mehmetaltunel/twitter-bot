@@ -79,6 +79,27 @@ class TwitterReplyBot:
         
         # Groq API key (AI cevaplar için)
         self.groq_api_key = os.getenv('GROQ_API_KEY', '')
+        
+        # Çekilen tweet'leri sakla (queue)
+        self.tweet_queue = []
+        
+        # Az önce çekilen tweet'leri queue'ya ekle (çaktırmadan)
+        tweets_to_queue = [
+            {
+                'id': '1989355337691070825',
+                'text': 'Bu hiç olmazsa 1.7trilyon$a satarım demiş. CHP gelse bir kaç villa, bir kaç bavul dolusu rüşvet karşılığı bedavaya verir.',
+                'is_ataturk_negative': False
+            },
+            {
+                'id': '1989351550339477784',
+                'text': 'CANLI | A Milli Takım Teknik Direktörü Vincenzo Montella ve İsmail Yüksek açıklamalarda bulunuyor',
+                'is_ataturk_negative': False
+            }
+        ]
+        
+        for tweet in tweets_to_queue:
+            self.tweet_queue.append(tweet)
+            logger.info(f"✅ Tweet queue'ya eklendi (çaktırmadan): {tweet['id']}")
 
     def search_tweets(self, query: str, max_results: int = 10) -> Optional[List[dict]]:
         """Twitter'da tweet ara"""
@@ -144,19 +165,33 @@ class TwitterReplyBot:
                     
                     response = requests.post(url, json=tweet_data, auth=auth, timeout=10)
                     
+                    # Rate limit header'larını logla (debug için)
+                    if 'x-rate-limit-limit' in response.headers:
+                        logger.debug(f"Rate limit limit: {response.headers['x-rate-limit-limit']}")
+                    if 'x-rate-limit-remaining' in response.headers:
+                        logger.debug(f"Rate limit remaining: {response.headers['x-rate-limit-remaining']}")
+                    if 'x-rate-limit-reset' in response.headers:
+                        logger.debug(f"Rate limit reset (raw): {response.headers['x-rate-limit-reset']}")
+                    
                     # Rate limit kontrolü - 429 alırsak reset zamanını bekle
                     if response.status_code == 429:
                         if 'x-rate-limit-reset' in response.headers:
-                            reset_time = int(response.headers['x-rate-limit-reset'])
+                            reset_time = int(response.headers['x-rate-limit-reset'])  # Twitter API'den gelen gerçek değer
                             current_time = int(time.time())
                             wait_seconds = reset_time - current_time + 5
+                            
+                            logger.info(f"📡 Twitter API'den gelen rate limit reset zamanı: {time.ctime(reset_time)} (Unix timestamp: {reset_time})")
+                            logger.info(f"🕐 Şu anki zaman: {time.ctime(current_time)} (Unix timestamp: {current_time})")
                             
                             if wait_seconds > 0:
                                 logger.warning(f"⏳ Tweet atma rate limit doldu! {wait_seconds} saniye ({wait_seconds//60} dakika) bekleniyor...")
                                 logger.warning(f"⏰ Reset zamanı: {time.ctime(reset_time)}")
                                 time.sleep(wait_seconds)
                                 # Tekrar dene
+                                logger.info("🔄 Rate limit reset oldu, tekrar deneniyor...")
                                 response = requests.post(url, json=tweet_data, auth=auth, timeout=10)
+                        else:
+                            logger.error("❌ 429 hatası alındı ama x-rate-limit-reset header'ı yok!")
                     
                     if response.status_code == 201:
                         result = response.json()
@@ -164,6 +199,12 @@ class TwitterReplyBot:
                         logger.info(f"✅ Tweet başarıyla atıldı! Yeni Tweet ID: {new_tweet_id}")
                         logger.info("")
                         return True
+                    elif response.status_code == 429:
+                        # Yine 429 aldık, bu sefer beklemeyelim, False dön
+                        logger.error(f"❌ Tweet atma rate limit hala dolu: {response.status_code} - {response.text}")
+                        logger.error("⚠️ Rate limit çok yüksek, tweet atılamadı. Bir sonraki tweet deneniyor...")
+                        logger.info("")
+                        return False
                     else:
                         logger.error(f"❌ Tweet atma hatası: {response.status_code} - {response.text}")
                         logger.info("")
@@ -422,6 +463,32 @@ Buna absürt, komik, anlamsız bir cevap yaz.
     def run_once(self):
         """Bot'u bir kez çalıştır (1 tweet bulup cevap ver)"""
         logger.info("")
+        
+        # Önce queue'da tweet var mı kontrol et
+        if len(self.tweet_queue) > 0:
+            logger.info(f"📋 Queue'da {len(self.tweet_queue)} tweet var, önce onlara cevap atılıyor...")
+            
+            # Queue'dan ilk tweet'i al
+            tweet_data = self.tweet_queue.pop(0)
+            tweet_id = tweet_data['id']
+            tweet_text = tweet_data['text']
+            is_ataturk_negative = tweet_data['is_ataturk_negative']
+            
+            logger.info(f"🎯 Queue'dan tweet alındı: {tweet_id}")
+            reply = self.generate_reply(tweet_text, is_ataturk_negative=is_ataturk_negative)
+            success = self.reply_to_tweet(tweet_id, reply, original_tweet=tweet_text)
+            
+            if success:
+                logger.info(f"✅ Queue'dan tweet başarıyla atıldı! Kalan: {len(self.tweet_queue)}")
+                return True
+            else:
+                # Tweet atılamadı, queue'ya geri ekle (başa)
+                self.tweet_queue.insert(0, tweet_data)
+                logger.warning(f"⚠️ Tweet atılamadı, queue'ya geri eklendi. Queue'da {len(self.tweet_queue)} tweet var.")
+                # Queue'da başka tweet varsa yeni tweet çekmeye gerek yok, False dön
+                return False
+        
+        # Queue boşsa yeni tweet çek
         logger.info("Rastgele tweet aranıyor...")
         random_tweets = self.search_random_tweets(max_results=10)  # Twitter API minimum 10 istiyor
         
@@ -429,7 +496,21 @@ Buna absürt, komik, anlamsız bir cevap yaz.
             logger.warning("⚠️ Hiç tweet bulunamadı!")
             return False
         
-        # Tüm tweet'leri kontrol et, uygun birini bul
+        # Çekilen tweet'leri logla
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(f"ÇEKİLEN {len(random_tweets)} TWEET:")
+        logger.info("=" * 60)
+        for i, tweet in enumerate(random_tweets, 1):
+            tweet_text = tweet.get('text', '')
+            tweet_id = tweet.get('id', '')
+            # Tweet metnini kısalt (çok uzunsa)
+            tweet_preview = tweet_text[:100] + "..." if len(tweet_text) > 100 else tweet_text
+            logger.info(f"{i}. ID: {tweet_id} | {tweet_preview}")
+        logger.info("=" * 60)
+        logger.info("")
+        
+        # Uygun tweet'leri queue'ya ekle
         for tweet in random_tweets:
             tweet_text = tweet.get('text', '')
             tweet_id = tweet.get('id', '')
@@ -439,23 +520,42 @@ Buna absürt, komik, anlamsız bir cevap yaz.
                 logger.info(f"⚠️ Tweet atlanıyor (hassas konu): {tweet_id[:20]}...")
                 continue  # Bir sonraki tweet'i dene
             
-            # Uygun tweet bulundu, cevap ver
-            logger.info(f"✅ Uygun tweet bulundu: {tweet_id}")
-            
-            # Atatürk'e hakaret içermiyorsa normal cevap ver
+            # Uygun tweet'i queue'ya ekle
             if not self.check_ataturk_negative(tweet_text):
-                reply = self.generate_reply(tweet_text, is_ataturk_negative=False)
-                success = self.reply_to_tweet(tweet_id, reply, original_tweet=tweet_text)
-                if success:
-                    return True
-                else:
-                    # Tweet atılamadı (rate limit vb.), bir sonraki tweet'i dene
-                    logger.warning(f"⚠️ Tweet atılamadı, bir sonraki tweet deneniyor...")
-                    continue
+                self.tweet_queue.append({
+                    'id': tweet_id,
+                    'text': tweet_text,
+                    'is_ataturk_negative': False
+                })
+                logger.info(f"✅ Uygun tweet queue'ya eklendi: {tweet_id}")
         
-        # Hiç uygun tweet bulunamadı
-        logger.warning("⚠️ 10 tweet kontrol edildi, hiçbiri uygun değil (hepsi hassas konu içeriyor)")
-        return False
+        # Queue'dan tweet al ve cevap at
+        if len(self.tweet_queue) > 0:
+            logger.info("")
+            logger.info(f"📋 Queue'da {len(self.tweet_queue)} tweet var, cevap atılıyor...")
+            
+            # Queue'dan ilk tweet'i al
+            tweet_data = self.tweet_queue.pop(0)
+            tweet_id = tweet_data['id']
+            tweet_text = tweet_data['text']
+            is_ataturk_negative = tweet_data['is_ataturk_negative']
+            
+            logger.info(f"🎯 Queue'dan tweet alındı: {tweet_id}")
+            reply = self.generate_reply(tweet_text, is_ataturk_negative=is_ataturk_negative)
+            success = self.reply_to_tweet(tweet_id, reply, original_tweet=tweet_text)
+            
+            if success:
+                logger.info(f"✅ Queue'dan tweet başarıyla atıldı! Kalan: {len(self.tweet_queue)}")
+                return True
+            else:
+                # Tweet atılamadı, queue'ya geri ekle (başa)
+                self.tweet_queue.insert(0, tweet_data)
+                logger.warning(f"⚠️ Tweet atılamadı, queue'ya geri eklendi. Queue'da {len(self.tweet_queue)} tweet var.")
+                return False
+        else:
+            # Hiç uygun tweet bulunamadı
+            logger.warning("⚠️ 10 tweet kontrol edildi, hiçbiri uygun değil (hepsi hassas konu içeriyor)")
+            return False
 
     def run(self):
         """Bot'u sürekli çalıştır (her 15 dakikada bir)"""
