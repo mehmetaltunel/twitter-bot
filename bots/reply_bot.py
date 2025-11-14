@@ -165,46 +165,42 @@ class TwitterReplyBot:
                     
                     response = requests.post(url, json=tweet_data, auth=auth, timeout=10)
                     
-                    # Rate limit header'larını logla (debug için)
+                    # TWEET ATMA rate limit header'larını logla
                     if 'x-rate-limit-limit' in response.headers:
-                        logger.debug(f"Rate limit limit: {response.headers['x-rate-limit-limit']}")
-                    if 'x-rate-limit-remaining' in response.headers:
-                        logger.debug(f"Rate limit remaining: {response.headers['x-rate-limit-remaining']}")
-                    if 'x-rate-limit-reset' in response.headers:
-                        logger.debug(f"Rate limit reset (raw): {response.headers['x-rate-limit-reset']}")
+                        limit = response.headers['x-rate-limit-limit']
+                        remaining = response.headers.get('x-rate-limit-remaining', 'N/A')
+                        reset = response.headers.get('x-rate-limit-reset', 'N/A')
+                        if reset != 'N/A':
+                            reset_time = time.ctime(int(reset))
+                            logger.info(f"📊 TWEET ATMA Rate Limit: {remaining}/{limit} kalan | Reset: {reset_time}")
+                        else:
+                            logger.info(f"📊 TWEET ATMA Rate Limit: {remaining}/{limit} kalan")
+                    elif 'x-rate-limit-remaining' in response.headers:
+                        remaining = response.headers['x-rate-limit-remaining']
+                        logger.info(f"📊 TWEET ATMA Rate Limit: {remaining} kalan")
                     
-                    # Rate limit kontrolü - 429 alırsak reset zamanını bekle
+                    # Rate limit kontrolü - 429 alırsak direkt False dön (beklemeyelim, run() tekrar deneyecek)
                     if response.status_code == 429:
                         if 'x-rate-limit-reset' in response.headers:
-                            reset_time = int(response.headers['x-rate-limit-reset'])  # Twitter API'den gelen gerçek değer
+                            reset_time = int(response.headers['x-rate-limit-reset'])
                             current_time = int(time.time())
-                            wait_seconds = reset_time - current_time + 5
+                            wait_seconds = reset_time - current_time
                             
-                            logger.info(f"📡 Twitter API'den gelen rate limit reset zamanı: {time.ctime(reset_time)} (Unix timestamp: {reset_time})")
-                            logger.info(f"🕐 Şu anki zaman: {time.ctime(current_time)} (Unix timestamp: {current_time})")
-                            
-                            if wait_seconds > 0:
-                                logger.warning(f"⏳ Tweet atma rate limit doldu! {wait_seconds} saniye ({wait_seconds//60} dakika) bekleniyor...")
-                                logger.warning(f"⏰ Reset zamanı: {time.ctime(reset_time)}")
-                                time.sleep(wait_seconds)
-                                # Tekrar dene
-                                logger.info("🔄 Rate limit reset oldu, tekrar deneniyor...")
-                                response = requests.post(url, json=tweet_data, auth=auth, timeout=10)
+                            logger.error(f"❌ Tweet ATMA rate limit doldu! Reset zamanı: {time.ctime(reset_time)} ({wait_seconds//60} dakika sonra)")
+                            logger.info("💡 Tweet atma limit'i dolmuş, False dönüyor. run() fonksiyonu 1 dakika sonra tekrar deneyecek.")
+                            logger.info("💡 Tweet çekme limit'i farklı, o dolmamış olabilir. Queue'da tweet varsa onlara cevap atılabilir.")
+                            return False
                         else:
                             logger.error("❌ 429 hatası alındı ama x-rate-limit-reset header'ı yok!")
+                            return False
                     
+                    # Response kontrolü
                     if response.status_code == 201:
                         result = response.json()
                         new_tweet_id = result.get('data', {}).get('id', '')
                         logger.info(f"✅ Tweet başarıyla atıldı! Yeni Tweet ID: {new_tweet_id}")
                         logger.info("")
                         return True
-                    elif response.status_code == 429:
-                        # Yine 429 aldık, bu sefer beklemeyelim, False dön
-                        logger.error(f"❌ Tweet atma rate limit hala dolu: {response.status_code} - {response.text}")
-                        logger.error("⚠️ Rate limit çok yüksek, tweet atılamadı. Bir sonraki tweet deneniyor...")
-                        logger.info("")
-                        return False
                     else:
                         logger.error(f"❌ Tweet atma hatası: {response.status_code} - {response.text}")
                         logger.info("")
@@ -417,32 +413,35 @@ Buna absürt, komik, anlamsız bir cevap yaz.
             
             response = requests.get(url, headers=headers, params=params, timeout=10)
             
-            # Rate limit kontrolü - 429 alırsak direkt bekle
+            # Rate limit kontrolü - 429 alırsak None dön (tweet çekme limit'i dolmuş, ama tweet atma limit'i farklı)
             if response.status_code == 429:
-                # Rate limit dolmuş, reset zamanını bekle
+                # Tweet ÇEKME rate limit'i dolmuş (tweet ATMA limit'i farklı!)
                 if 'x-rate-limit-reset' in response.headers:
                     reset_time = int(response.headers['x-rate-limit-reset'])
                     current_time = int(time.time())
-                    wait_seconds = reset_time - current_time + 5  # 5 saniye ekstra
+                    wait_seconds = reset_time - current_time
                     
-                    if wait_seconds > 0:
-                        logger.warning(f"⏳ Rate limit doldu! {wait_seconds} saniye ({wait_seconds//60} dakika) bekleniyor...")
-                        logger.warning(f"⏰ Reset zamanı: {time.ctime(reset_time)}")
-                        time.sleep(wait_seconds)
-                        # Tekrar dene
-                        response = requests.get(url, headers=headers, params=params, timeout=10)
+                    logger.warning(f"⏳ Tweet ÇEKME rate limit doldu! Reset: {time.ctime(reset_time)} ({wait_seconds//60} dakika sonra)")
+                    logger.info("💡 Tweet çekme limit'i dolmuş ama tweet ATMA limit'i farklı. Queue'da tweet varsa onlara cevap atılabilir.")
+                    # None dön, beklemeyelim (queue'da tweet varsa onlara cevap atılabilir)
+                    return None
                 else:
                     logger.error("❌ Rate limit doldu ama reset zamanı bilgisi yok!")
                     return None
             
-            # Rate limit loglama
-            if 'x-rate-limit-remaining' in response.headers:
-                remaining = int(response.headers['x-rate-limit-remaining'])
-                logger.info(f"Rate limit kalan: {remaining}")
-            
-            if 'x-rate-limit-reset' in response.headers:
-                reset_time = int(response.headers['x-rate-limit-reset'])
-                logger.info(f"Rate limit reset zamanı: {time.ctime(reset_time)}")
+            # TWEET ÇEKME rate limit header'larını logla
+            if 'x-rate-limit-limit' in response.headers:
+                limit = response.headers['x-rate-limit-limit']
+                remaining = response.headers.get('x-rate-limit-remaining', 'N/A')
+                reset = response.headers.get('x-rate-limit-reset', 'N/A')
+                if reset != 'N/A':
+                    reset_time = time.ctime(int(reset))
+                    logger.info(f"📊 TWEET ÇEKME Rate Limit: {remaining}/{limit} kalan | Reset: {reset_time}")
+                else:
+                    logger.info(f"📊 TWEET ÇEKME Rate Limit: {remaining}/{limit} kalan")
+            elif 'x-rate-limit-remaining' in response.headers:
+                remaining = response.headers['x-rate-limit-remaining']
+                logger.info(f"📊 TWEET ÇEKME Rate Limit: {remaining} kalan")
             
             # Başarılı istek
             if response.status_code == 200:
@@ -485,14 +484,23 @@ Buna absürt, komik, anlamsız bir cevap yaz.
                 # Tweet atılamadı, queue'ya geri ekle (başa)
                 self.tweet_queue.insert(0, tweet_data)
                 logger.warning(f"⚠️ Tweet atılamadı, queue'ya geri eklendi. Queue'da {len(self.tweet_queue)} tweet var.")
-                # Queue'da başka tweet varsa yeni tweet çekmeye gerek yok, False dön
+                # Rate limit dolmuş, False dön (run() fonksiyonu 1 dakika sonra tekrar deneyecek)
                 return False
         
         # Queue boşsa yeni tweet çek
-        logger.info("Rastgele tweet aranıyor...")
+        logger.info("Queue boş, yeni tweet çekiliyor...")
         random_tweets = self.search_random_tweets(max_results=10)  # Twitter API minimum 10 istiyor
         
-        if not random_tweets or len(random_tweets) == 0:
+        # Tweet çekme rate limit'i dolmuşsa ama queue boşsa, False dön (run() tekrar deneyecek)
+        # ÖNEMLİ: Tweet çekme limit'i dolmuş olsa bile, tweet ATMA limit'i farklı!
+        # Eğer queue'da tweet varsa onlara cevap atılabilir, bu yüzden beklemeyelim.
+        if random_tweets is None:
+            logger.warning("⚠️ Tweet ÇEKME rate limit'i dolmuş, queue boş.")
+            logger.info("💡 Tweet çekme limit'i dolmuş ama tweet ATMA limit'i farklı. Queue'da tweet varsa onlara cevap atılabilir.")
+            logger.info("⏳ Tweet çekme limit'i reset olana kadar bekleniyor...")
+            return False
+        
+        if len(random_tweets) == 0:
             logger.warning("⚠️ Hiç tweet bulunamadı!")
             return False
         
@@ -574,12 +582,29 @@ Buna absürt, komik, anlamsız bir cevap yaz.
                 else:
                     logger.info("⚠️ Tweet atılamadı veya atlandı")
                 
-                # 15 dakika bekle (900 saniye)
-                wait_minutes = 15
-                logger.info("")
-                logger.info(f"⏳ {wait_minutes} dakika bekleniyor... (Sonraki tweet için)")
-                logger.info("=" * 60)
-                time.sleep(wait_minutes * 60)
+                # Queue'da tweet varsa daha sık dene (rate limit reset olunca hemen dene)
+                if len(self.tweet_queue) > 0:
+                    wait_seconds = 60  # Queue'da tweet varsa 1 dakika bekle, sonra tekrar dene
+                    logger.info("")
+                    logger.info(f"📋 Queue'da {len(self.tweet_queue)} tweet var, {wait_seconds} saniye sonra tekrar denenecek...")
+                    logger.info("=" * 60)
+                    
+                    # Beklerken her 15 saniyede bir log at (bot'un çalıştığını görmek için)
+                    elapsed = 0
+                    while elapsed < wait_seconds:
+                        sleep_time = min(15, wait_seconds - elapsed)  # Her 15 saniye veya kalan süre
+                        time.sleep(sleep_time)
+                        elapsed += sleep_time
+                        remaining = wait_seconds - elapsed
+                        if remaining > 0:
+                            logger.info(f"⏳ Queue'da tweet bekliyor... {remaining} saniye sonra tekrar denenecek (Queue: {len(self.tweet_queue)} tweet)")
+                else:
+                    # Queue boşsa 15 dakika bekle
+                    wait_minutes = 15
+                    logger.info("")
+                    logger.info(f"⏳ Queue boş, {wait_minutes} dakika bekleniyor... (Yeni tweet çekmek için)")
+                    logger.info("=" * 60)
+                    time.sleep(wait_minutes * 60)
                 
             except KeyboardInterrupt:
                 logger.info("")
@@ -587,8 +612,8 @@ Buna absürt, komik, anlamsız bir cevap yaz.
                 break
             except Exception as e:
                 logger.error(f"❌ Hata: {e}")
-                logger.info("15 dakika sonra tekrar denenecek...")
-                time.sleep(15 * 60)  # Hata olursa da 15 dakika bekle
+                logger.info("60 saniye sonra tekrar denenecek...")
+                time.sleep(60)  # Hata olursa 1 dakika bekle
 
 
 def main():
