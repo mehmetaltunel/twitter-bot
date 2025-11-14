@@ -144,6 +144,20 @@ class TwitterReplyBot:
                     
                     response = requests.post(url, json=tweet_data, auth=auth, timeout=10)
                     
+                    # Rate limit kontrolü - 429 alırsak reset zamanını bekle
+                    if response.status_code == 429:
+                        if 'x-rate-limit-reset' in response.headers:
+                            reset_time = int(response.headers['x-rate-limit-reset'])
+                            current_time = int(time.time())
+                            wait_seconds = reset_time - current_time + 5
+                            
+                            if wait_seconds > 0:
+                                logger.warning(f"⏳ Tweet atma rate limit doldu! {wait_seconds} saniye ({wait_seconds//60} dakika) bekleniyor...")
+                                logger.warning(f"⏰ Reset zamanı: {time.ctime(reset_time)}")
+                                time.sleep(wait_seconds)
+                                # Tekrar dene
+                                response = requests.post(url, json=tweet_data, auth=auth, timeout=10)
+                    
                     if response.status_code == 201:
                         result = response.json()
                         new_tweet_id = result.get('data', {}).get('id', '')
@@ -408,27 +422,39 @@ Buna absürt, komik, anlamsız bir cevap yaz.
     def run_once(self):
         """Bot'u bir kez çalıştır (1 tweet bulup cevap ver)"""
         logger.info("")
-        logger.info("Rastgele 1 tweet aranıyor...")
-        random_tweets = self.search_random_tweets(max_results=10)  # Twitter API minimum 10 istiyor, sadece ilk 1 tanesini kullanacağız
+        logger.info("Rastgele tweet aranıyor...")
+        random_tweets = self.search_random_tweets(max_results=10)  # Twitter API minimum 10 istiyor
         
-        if random_tweets and len(random_tweets) > 0:
-            # İlk tweet'i al
-            selected_tweet = random_tweets[0]
-            tweet_text = selected_tweet.get('text', '')
-            tweet_id = selected_tweet.get('id', '')
+        if not random_tweets or len(random_tweets) == 0:
+            logger.warning("⚠️ Hiç tweet bulunamadı!")
+            return False
+        
+        # Tüm tweet'leri kontrol et, uygun birini bul
+        for tweet in random_tweets:
+            tweet_text = tweet.get('text', '')
+            tweet_id = tweet.get('id', '')
             
             # Önce tweet'e cevap verilmeli mi kontrol et
             if not self.should_reply_to_tweet(tweet_text):
-                logger.info(f"⚠️ Tweet atlanıyor (hassas konu): {tweet_id}")
-                return False
+                logger.info(f"⚠️ Tweet atlanıyor (hassas konu): {tweet_id[:20]}...")
+                continue  # Bir sonraki tweet'i dene
+            
+            # Uygun tweet bulundu, cevap ver
+            logger.info(f"✅ Uygun tweet bulundu: {tweet_id}")
             
             # Atatürk'e hakaret içermiyorsa normal cevap ver
             if not self.check_ataturk_negative(tweet_text):
-                logger.info(f"Rastgele tweet bulundu: {tweet_id}")
                 reply = self.generate_reply(tweet_text, is_ataturk_negative=False)
-                self.reply_to_tweet(tweet_id, reply, original_tweet=tweet_text)
-                return True
+                success = self.reply_to_tweet(tweet_id, reply, original_tweet=tweet_text)
+                if success:
+                    return True
+                else:
+                    # Tweet atılamadı (rate limit vb.), bir sonraki tweet'i dene
+                    logger.warning(f"⚠️ Tweet atılamadı, bir sonraki tweet deneniyor...")
+                    continue
         
+        # Hiç uygun tweet bulunamadı
+        logger.warning("⚠️ 10 tweet kontrol edildi, hiçbiri uygun değil (hepsi hassas konu içeriyor)")
         return False
 
     def run(self):

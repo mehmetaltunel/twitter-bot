@@ -1,0 +1,13 @@
+İlgilisine:
+
+Python ile  Twitter bot projesi.
+
+Özellikler:
+- AI destekli tweet cevapları
+- Trend analizi ve otomatik tweet oluşturma
+- Akıllı filtreleme sistemi
+- Rate limit yönetimi
+
+Kodlar GitHub'da mevcut. -> github/mehmetaltunel
+
+#Python #TwitterBot #AI #MachineLearning #Coding #Developer #Tech #Programming #Automation #BotDevelopment #OpenSource #GitHub #SoftwareDevelopment #WebScraping #APIIntegration
