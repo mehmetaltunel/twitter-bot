@@ -82,24 +82,6 @@ class TwitterReplyBot:
         
         # Çekilen tweet'leri sakla (queue)
         self.tweet_queue = []
-        
-        # Az önce çekilen tweet'leri queue'ya ekle (çaktırmadan)
-        tweets_to_queue = [
-            {
-                'id': '1989355337691070825',
-                'text': 'Bu hiç olmazsa 1.7trilyon$a satarım demiş. CHP gelse bir kaç villa, bir kaç bavul dolusu rüşvet karşılığı bedavaya verir.',
-                'is_ataturk_negative': False
-            },
-            {
-                'id': '1989351550339477784',
-                'text': 'CANLI | A Milli Takım Teknik Direktörü Vincenzo Montella ve İsmail Yüksek açıklamalarda bulunuyor',
-                'is_ataturk_negative': False
-            }
-        ]
-        
-        for tweet in tweets_to_queue:
-            self.tweet_queue.append(tweet)
-            logger.info(f"✅ Tweet queue'ya eklendi (çaktırmadan): {tweet['id']}")
 
     def search_tweets(self, query: str, max_results: int = 10) -> Optional[List[dict]]:
         """Twitter'da tweet ara"""
