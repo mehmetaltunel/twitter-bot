@@ -259,7 +259,15 @@ class TwitterReplyBot:
             "afet",
             "yardım kampanyası",
             "bağış",
-            "yardım"
+            "yardım",
+            # Milli günler ve bayramlar (milli takım hariç)
+            "milli gün",
+            "cumhuriyet bayramı",
+            "zafer bayramı",
+            "23 nisan",
+            "19 mayıs",
+            "30 ağustos",
+            "29 ekim"
         ]
         
         # Hassas konu varsa cevap verme
@@ -291,8 +299,33 @@ class TwitterReplyBot:
         # Normal tweet ise cevap ver (varsayılan)
         return True
 
+    def check_milli_takim(self, tweet_text: str) -> bool:
+        """Tweet milli takım ile ilgili mi kontrol et"""
+        tweet_lower = tweet_text.lower()
+        milli_keywords = [
+            "milli takım",
+            "a milli",
+            "milli futbol",
+            "fifa",
+            "dünya kupası",
+            "play-off",
+            "elemeler",
+            "bizimçocuklar",
+            "montella",
+            "hakan çalhanoğlu",
+            "galibiyet",
+            "zafer",
+            "tebrik",
+            "tebrikler"
+        ]
+        
+        for keyword in milli_keywords:
+            if keyword in tweet_lower:
+                return True
+        return False
+
     def generate_reply_with_ai(self, tweet_text: str, is_ataturk_negative: bool = False) -> Optional[str]:
-        """AI ile absürt cevap oluştur (HER TWEET İÇİN AYRI CEVAP)"""
+        """AI ile dark mizahlı, kudurtucu cevap oluştur (HER TWEET İÇİN AYRI CEVAP)"""
         if not self.groq_api_key:
             logger.error("❌ Groq API key bulunamadı! https://console.groq.com/ adresinden al ve koda ekle!")
             return None
@@ -304,34 +337,56 @@ class TwitterReplyBot:
                 "Content-Type": "application/json"
             }
             
+            # Milli takım tweet'i mi kontrol et
+            is_milli_takim = self.check_milli_takim(tweet_text)
+            
             if is_ataturk_negative:
                 # Atatürk'e hakaret edenlere özel absürt, dark mizahlı cevap
                 prompt = f"""Birisi şu tweet'i attı: "{tweet_text}"
 
-Bu kişi Atatürk'e hakaret ediyor. Ona absürt, dark mizahlı, kudurtucu ama dava edilme riski olmayan bir cevap yaz. 
-- Absürt olmalı (örnek: "karpuz kestim biber çıktı" gibi)
-- Dark mizah içermeli
-- Onu kudurtmalı ama hakaret içermemeli
-- Dava edilme riski olmamalı
+Bu kişi Atatürk'e hakaret ediyor. Ona dark mizahlı, kudurtucu, agresif ama dava edilme riski olmayan bir cevap yaz. 
+- Dark mizah içermeli (sert, kudurtucu ama hakaret değil)
+- Onu kudurtmalı, sinirlendirmeli ama küfür/hakaret içermemeli
+- Alaycı, küçümseyici ton kullan ama yasal sınırlar içinde kal
+- Dava edilme riski olmamalı (açık hakaret yok)
+- Maksimum 280 karakter
+- Sadece cevabı yaz, başka açıklama ekleme"""
+            elif is_milli_takim:
+                # Milli takım tweet'lerine özel troll ama dark mizah olmayan cevap
+                prompt = f"""Birisi şu tweet'i attı: "{tweet_text}"
+
+Bu tweet milli takım ile ilgili. Ona troll, eğlenceli, absürt ama dark mizah olmayan bir cevap yaz.
+- Troll ve eğlenceli olmalı
+- Absürt ve komik olabilir
+- Dark mizah, kudurtucu veya saygısız olmamalı
+- Milli takıma hakaret etme, sadece eğlenceli troll yap
 - Maksimum 280 karakter
 - Sadece cevabı yaz, başka açıklama ekleme"""
             else:
-                # Genel absürt cevap
+                # Genel dark mizahlı, kudurtucu cevap
                 prompt = f"""Birisi şu tweet'i attı: "{tweet_text}"
 
-Buna absürt, komik, anlamsız bir cevap yaz. 
-- Absürt olmalı (örnek: "karpuz kestim biber çıktı" gibi)
-- Komik ve anlamsız olmalı
+Buna dark mizahlı, kudurtucu, agresif ama dava edilme riski olmayan bir cevap yaz. 
+- Dark mizah içermeli (sert, kudurtucu ama hakaret değil)
+- Alaycı, küçümseyici, kudurtucu ton kullan
+- Onu sinirlendirmeli ama küfür/hakaret içermemeli
+- Yasal sınırlar içinde kal (açık hakaret yok)
 - Maksimum 280 karakter
 - Sadece cevabı yaz, başka açıklama ekleme"""
+            
+            # System message'ı tweet tipine göre ayarla
+            if is_milli_takim:
+                system_message = "Sen troll, eğlenceli, absürt tweet cevapları yazan bir asistansın. Milli takım tweet'lerine troll ve eğlenceli cevaplar verirsin. Absürt ve komik olabilirsin ama dark mizah, kudurtucu veya saygısız olmazsın. Milli takıma hakaret etmezsin."
+            else:
+                system_message = "Sen dark mizahlı, kudurtucu, agresif tweet cevapları yazan bir asistansın. Alaycı, küçümseyici ama yasal sınırlar içinde kalarak kudurtucu cevaplar üretirsin. Küfür ve açık hakaret kullanmazsın ama kudurtucu olursun."
             
             payload = {
                 "model": "llama-3.3-70b-versatile",  # En güçlü model
                 "messages": [
-                    {"role": "system", "content": "Sen absürt, komik, dark mizahlı tweet cevapları yazan bir asistansın. Her seferinde farklı ve yaratıcı cevaplar üretirsin."},
+                    {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.9,  # Daha yaratıcı olması için yüksek
+                "temperature": 0.95 if not is_milli_takim else 0.8,  # Milli takım için biraz daha düşük temperature
                 "max_tokens": 200
             }
             
@@ -353,12 +408,12 @@ Buna absürt, komik, anlamsız bir cevap yaz.
             return None
 
     def generate_reply(self, tweet_text: str, is_ataturk_negative: bool = False) -> str:
-        """Tweet için absürt cevap oluştur (AI ile - HER TWEET İÇİN AYRI)"""
+        """Tweet için dark mizahlı, kudurtucu cevap oluştur (AI ile - HER TWEET İÇİN AYRI)"""
         # ÖNCE AI'YI DENE
         reply = self.generate_reply_with_ai(tweet_text, is_ataturk_negative)
         
         # AI başarısız olursa fallback (ama önce AI'yı dene)
-        if not reply or reply == "Karpuz kestim biber çıktı":
+        if not reply:
             logger.warning("⚠️ AI cevap üretemedi, tekrar deneniyor...")
             # Bir kez daha dene
             time.sleep(1)
@@ -366,10 +421,13 @@ Buna absürt, komik, anlamsız bir cevap yaz.
             
             # Hala başarısızsa fallback
             if not reply:
+                is_milli_takim = self.check_milli_takim(tweet_text)
                 if is_ataturk_negative:
-                    reply = "Karpuz kestim biber çıktı, sen de Atatürk'e laf atıyorsun. Mantık?"
+                    reply = "Atatürk'e laf atıp duruyorsun, senin mantığın nerede kaldı? Bir düşün bakalım."
+                elif is_milli_takim:
+                    reply = "Vay be, milli takım! 🏆🇹🇷"
                 else:
-                    reply = "Karpuz kestim biber çıktı"
+                    reply = "Bu ne saçmalık böyle? Bir düşün bakalım ne dediğini."
                 logger.warning("⚠️ AI çalışmadı, fallback cevap kullanıldı")
         
         return reply
